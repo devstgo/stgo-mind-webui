@@ -1,6 +1,6 @@
 {
-	"name": "Open WebUI",
-	"short_name": "Open WebUI",
+	"name": "stgo mind webUI",
+	"short_name": "stgo mind webUI",
 	"start_url": "/",
 	"display": "standalone",
 	"background_color": "#343541",
