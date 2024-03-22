@@ -46,5 +46,9 @@
 	{
 		"code": "zh-TW",
 		"title": "Chinese (Traditional)"
+	},
+	{
+		"code": "gl-ES",
+		"title": "Stgo"
 	}
 ]
