@@ -9,6 +9,7 @@
 
 	import '../tailwind.css';
 	import '../app.css';
+	import '../custom.css';
 
 	import 'tippy.js/dist/tippy.css';
 
