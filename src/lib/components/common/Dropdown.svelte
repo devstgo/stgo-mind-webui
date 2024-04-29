@@ -2,10 +2,14 @@
 	import { DropdownMenu } from 'bits-ui';
 	import { createEventDispatcher } from 'svelte';
 
+	import { flyAndScale } from '$lib/utils/transitions';
+
+	export let show = false;
 	const dispatch = createEventDispatcher();
 </script>
 
 <DropdownMenu.Root
+	bind:open={show}
 	onOpenChange={(state) => {
 		dispatch('change', state);
 	}}
@@ -20,6 +24,7 @@
 			sideOffset={8}
 			side="bottom"
 			align="start"
+			transition={flyAndScale}
 		>
 			<DropdownMenu.Item class="flex items-center px-3 py-2 text-sm  font-medium">
 				<div class="flex items-center">Profile</div>

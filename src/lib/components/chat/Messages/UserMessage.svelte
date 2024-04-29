@@ -15,6 +15,7 @@
 	export let message;
 	export let siblings;
 	export let isFirstMessage: boolean;
+	export let readOnly: boolean;
 
 	export let confirmEditMessage: Function;
 	export let showPreviousMessage: Function;
@@ -175,11 +176,24 @@
 							e.target.style.height = '';
 							e.target.style.height = `${e.target.scrollHeight}px`;
 						}}
+						on:keydown={(e) => {
+							if (e.key === 'Escape') {
+								document.getElementById('close-edit-message-button')?.click();
+							}
+
+							const isCmdOrCtrlPressed = e.metaKey || e.ctrlKey;
+							const isEnterPressed = e.key === 'Enter';
+
+							if (isCmdOrCtrlPressed && isEnterPressed) {
+								document.getElementById('save-edit-message-button')?.click();
+							}
+						}}
 					/>
 
 					<div class=" mt-2 mb-1 flex justify-center space-x-2 text-sm font-medium">
 						<button
-							class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-gray-100 transition rounded-lg"
+							id="save-edit-message-button"
+							class="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-gray-100 transition rounded-lg-lg"
 							on:click={() => {
 								editMessageConfirmHandler();
 							}}
@@ -188,6 +202,7 @@
 						</button>
 
 						<button
+							id="close-edit-message-button"
 							class=" px-4 py-2 hover:bg-gray-100 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-100 transition outline outline-1 outline-gray-200 dark:outline-gray-600 rounded-lg"
 							on:click={() => {
 								cancelEditMessage();
@@ -203,7 +218,7 @@
 
 					<div class=" flex justify-start space-x-1 text-gray-700 dark:text-gray-500">
 						{#if siblings.length > 1}
-							<div class="flex self-center -mt-1">
+							<div class="flex self-center">
 								<button
 									class="self-center dark:hover:text-white hover:text-black transition"
 									on:click={() => {
@@ -250,29 +265,31 @@
 							</div>
 						{/if}
 
-						<Tooltip content="Edit" placement="bottom">
-							<button
-								class="invisible group-hover:visible p-1 rounded dark:hover:text-white hover:text-black transition edit-user-message-button"
-								on:click={() => {
-									editMessageHandler();
-								}}
-							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke-width="2"
-									stroke="currentColor"
-									class="w-4 h-4"
+						{#if !readOnly}
+							<Tooltip content="Edit" placement="bottom">
+								<button
+									class="invisible group-hover:visible p-1 rounded dark:hover:text-white hover:text-black transition edit-user-message-button"
+									on:click={() => {
+										editMessageHandler();
+									}}
 								>
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"
-									/>
-								</svg>
-							</button>
-						</Tooltip>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke-width="2"
+										stroke="currentColor"
+										class="w-4 h-4"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"
+										/>
+									</svg>
+								</button>
+							</Tooltip>
+						{/if}
 
 						<Tooltip content="Copy" placement="bottom">
 							<button
@@ -298,7 +315,7 @@
 							</button>
 						</Tooltip>
 
-						{#if !isFirstMessage}
+						{#if !isFirstMessage && !readOnly}
 							<Tooltip content="Delete" placement="bottom">
 								<button
 									class="invisible group-hover:visible p-1 rounded dark:hover:text-white hover:text-black transition"

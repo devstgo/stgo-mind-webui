@@ -6,6 +6,7 @@ import requests
 import aiohttp
 import asyncio
 import json
+import logging
 
 from pydantic import BaseModel
 
@@ -19,10 +20,11 @@ from utils.utils import (
     get_admin_user,
 )
 from config import (
+    SRC_LOG_LEVELS,
     OPENAI_API_BASE_URLS,
     OPENAI_API_KEYS,
     CACHE_DIR,
-    MODEL_FILTER_ENABLED,
+    ENABLE_MODEL_FILTER,
     MODEL_FILTER_LIST,
 )
 from typing import List, Optional
@@ -30,6 +32,9 @@ from typing import List, Optional
 
 import hashlib
 from pathlib import Path
+
+log = logging.getLogger(__name__)
+log.setLevel(SRC_LOG_LEVELS["OPENAI"])
 
 app = FastAPI()
 app.add_middleware(
@@ -40,7 +45,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.state.MODEL_FILTER_ENABLED = MODEL_FILTER_ENABLED
+app.state.ENABLE_MODEL_FILTER = ENABLE_MODEL_FILTER
 app.state.MODEL_FILTER_LIST = MODEL_FILTER_LIST
 
 app.state.OPENAI_API_BASE_URLS = OPENAI_API_BASE_URLS
@@ -75,6 +80,7 @@ async def get_openai_urls(user=Depends(get_admin_user)):
 
 @app.post("/urls/update")
 async def update_openai_urls(form_data: UrlsUpdateForm, user=Depends(get_admin_user)):
+    await get_all_models()
     app.state.OPENAI_API_BASE_URLS = form_data.urls
     return {"OPENAI_API_BASE_URLS": app.state.OPENAI_API_BASE_URLS}
 
@@ -134,7 +140,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
             return FileResponse(file_path)
 
         except Exception as e:
-            print(e)
+            log.exception(e)
             error_detail = "Open WebUI: Server Connection Error"
             if r is not None:
                 try:
@@ -160,7 +166,7 @@ async def fetch_url(url, key):
                 return await response.json()
     except Exception as e:
         # Handle connection error here
-        print(f"Connection error: {e}")
+        log.error(f"Connection error: {e}")
         return None
 
 
@@ -182,7 +188,7 @@ def merge_models_lists(model_lists):
 
 
 async def get_all_models():
-    print("get_all_models")
+    log.info("get_all_models()")
 
     if len(app.state.OPENAI_API_KEYS) == 1 and app.state.OPENAI_API_KEYS[0] == "":
         models = {"data": []}
@@ -208,7 +214,7 @@ async def get_all_models():
             )
         }
 
-        print(models)
+        log.info(f"models: {models}")
         app.state.MODELS = {model["id"]: model for model in models["data"]}
 
         return models
@@ -219,7 +225,7 @@ async def get_all_models():
 async def get_models(url_idx: Optional[int] = None, user=Depends(get_current_user)):
     if url_idx == None:
         models = await get_all_models()
-        if app.state.MODEL_FILTER_ENABLED:
+        if app.state.ENABLE_MODEL_FILTER:
             if user.role == "user":
                 models["data"] = list(
                     filter(
@@ -246,7 +252,7 @@ async def get_models(url_idx: Optional[int] = None, user=Depends(get_current_use
 
             return response_data
         except Exception as e:
-            print(e)
+            log.exception(e)
             error_detail = "Open WebUI: Server Connection Error"
             if r is not None:
                 try:
@@ -280,7 +286,7 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
         if body.get("model") == "gpt-4-vision-preview":
             if "max_tokens" not in body:
                 body["max_tokens"] = 4000
-            print("Modified body_dict:", body)
+            log.debug("Modified body_dict:", body)
 
         # Fix for ChatGPT calls failing because the num_ctx key is in body
         if "num_ctx" in body:
@@ -292,7 +298,7 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
         # Convert the modified body back to JSON
         body = json.dumps(body)
     except json.JSONDecodeError as e:
-        print("Error loading request body into a dictionary:", e)
+        log.error("Error loading request body into a dictionary:", e)
 
     url = app.state.OPENAI_API_BASE_URLS[idx]
     key = app.state.OPENAI_API_KEYS[idx]
@@ -330,13 +336,13 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
             response_data = r.json()
             return response_data
     except Exception as e:
-        print(e)
+        log.exception(e)
         error_detail = "Open WebUI: Server Connection Error"
         if r is not None:
             try:
                 res = r.json()
                 if "error" in res:
-                    error_detail = f"External: {res['error']}"
+                    error_detail = f"External: {res['error']['message'] if 'message' in res['error'] else res['error']}"
             except:
                 error_detail = f"External: {e}"
 

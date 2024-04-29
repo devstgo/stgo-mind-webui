@@ -14,14 +14,22 @@ uuid
 requests
 aiohttp
 peewee
+peewee-migrate
+psycopg2-binary
+pymysql
 bcrypt
 
-litellm==1.30.7
+litellm==1.35.17
+litellm[proxy]==1.35.17
+
+boto3
+
 argon2-cffi
 apscheduler
 google-generativeai
 
 langchain
+langchain-chroma
 langchain-community
 fake_useragent
 chromadb
@@ -39,9 +47,13 @@ xlrd
 opencv-python-headless
 rapidocr-onnxruntime
 
+fpdf2
+rank_bm25
+
 faster-whisper
 
 PyJWT
 pyjwt[crypto]
 
 black
+langfuse

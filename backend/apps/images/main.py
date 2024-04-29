@@ -18,6 +18,8 @@ from utils.utils import (
     get_current_user,
     get_admin_user,
 )
+
+from apps.images.utils.comfyui import ImageGenerationPayload, comfyui_generate_image
 from utils.misc import calculate_sha256
 from typing import Optional
 from pydantic import BaseModel
@@ -25,9 +27,25 @@ from pathlib import Path
 import uuid
 import base64
 import json
+import logging
 
-from config import CACHE_DIR, AUTOMATIC1111_BASE_URL
+from config import (
+    SRC_LOG_LEVELS,
+    CACHE_DIR,
+    IMAGE_GENERATION_ENGINE,
+    ENABLE_IMAGE_GENERATION,
+    AUTOMATIC1111_BASE_URL,
+    COMFYUI_BASE_URL,
+    IMAGES_OPENAI_API_BASE_URL,
+    IMAGES_OPENAI_API_KEY,
+    IMAGE_GENERATION_MODEL,
+    IMAGE_SIZE,
+    IMAGE_STEPS,
+)
 
+
+log = logging.getLogger(__name__)
+log.setLevel(SRC_LOG_LEVELS["IMAGES"])
 
 IMAGE_CACHE_DIR = Path(CACHE_DIR).joinpath("./image/generations/")
 IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -41,17 +59,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.state.ENGINE = ""
-app.state.ENABLED = False
+app.state.ENGINE = IMAGE_GENERATION_ENGINE
+app.state.ENABLED = ENABLE_IMAGE_GENERATION
 
-app.state.OPENAI_API_KEY = ""
-app.state.MODEL = ""
+app.state.OPENAI_API_BASE_URL = IMAGES_OPENAI_API_BASE_URL
+app.state.OPENAI_API_KEY = IMAGES_OPENAI_API_KEY
+
+app.state.MODEL = IMAGE_GENERATION_MODEL
 
 
 app.state.AUTOMATIC1111_BASE_URL = AUTOMATIC1111_BASE_URL
+app.state.COMFYUI_BASE_URL = COMFYUI_BASE_URL
 
-app.state.IMAGE_SIZE = "512x512"
-app.state.IMAGE_STEPS = 50
+
+app.state.IMAGE_SIZE = IMAGE_SIZE
+app.state.IMAGE_STEPS = IMAGE_STEPS
 
 
 @app.get("/config")
@@ -71,57 +93,79 @@ async def update_config(form_data: ConfigUpdateForm, user=Depends(get_admin_user
     return {"engine": app.state.ENGINE, "enabled": app.state.ENABLED}
 
 
-class UrlUpdateForm(BaseModel):
-    url: str
+class EngineUrlUpdateForm(BaseModel):
+    AUTOMATIC1111_BASE_URL: Optional[str] = None
+    COMFYUI_BASE_URL: Optional[str] = None
 
 
 @app.get("/url")
-async def get_automatic1111_url(user=Depends(get_admin_user)):
-    return {"AUTOMATIC1111_BASE_URL": app.state.AUTOMATIC1111_BASE_URL}
+async def get_engine_url(user=Depends(get_admin_user)):
+    return {
+        "AUTOMATIC1111_BASE_URL": app.state.AUTOMATIC1111_BASE_URL,
+        "COMFYUI_BASE_URL": app.state.COMFYUI_BASE_URL,
+    }
 
 
 @app.post("/url/update")
-async def update_automatic1111_url(
-    form_data: UrlUpdateForm, user=Depends(get_admin_user)
+async def update_engine_url(
+    form_data: EngineUrlUpdateForm, user=Depends(get_admin_user)
 ):
 
-    if form_data.url == "":
+    if form_data.AUTOMATIC1111_BASE_URL == None:
         app.state.AUTOMATIC1111_BASE_URL = AUTOMATIC1111_BASE_URL
     else:
-        url = form_data.url.strip("/")
+        url = form_data.AUTOMATIC1111_BASE_URL.strip("/")
         try:
             r = requests.head(url)
             app.state.AUTOMATIC1111_BASE_URL = url
         except Exception as e:
             raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
 
+    if form_data.COMFYUI_BASE_URL == None:
+        app.state.COMFYUI_BASE_URL = COMFYUI_BASE_URL
+    else:
+        url = form_data.COMFYUI_BASE_URL.strip("/")
+
+        try:
+            r = requests.head(url)
+            app.state.COMFYUI_BASE_URL = url
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
+
     return {
         "AUTOMATIC1111_BASE_URL": app.state.AUTOMATIC1111_BASE_URL,
+        "COMFYUI_BASE_URL": app.state.COMFYUI_BASE_URL,
         "status": True,
     }
 
 
-class OpenAIKeyUpdateForm(BaseModel):
+class OpenAIConfigUpdateForm(BaseModel):
+    url: str
     key: str
 
 
-@app.get("/key")
-async def get_openai_key(user=Depends(get_admin_user)):
-    return {"OPENAI_API_KEY": app.state.OPENAI_API_KEY}
+@app.get("/openai/config")
+async def get_openai_config(user=Depends(get_admin_user)):
+    return {
+        "OPENAI_API_BASE_URL": app.state.OPENAI_API_BASE_URL,
+        "OPENAI_API_KEY": app.state.OPENAI_API_KEY,
+    }
 
 
-@app.post("/key/update")
-async def update_openai_key(
-    form_data: OpenAIKeyUpdateForm, user=Depends(get_admin_user)
+@app.post("/openai/config/update")
+async def update_openai_config(
+    form_data: OpenAIConfigUpdateForm, user=Depends(get_admin_user)
 ):
-
     if form_data.key == "":
         raise HTTPException(status_code=400, detail=ERROR_MESSAGES.API_KEY_NOT_FOUND)
 
+    app.state.OPENAI_API_BASE_URL = form_data.url
     app.state.OPENAI_API_KEY = form_data.key
+
     return {
-        "OPENAI_API_KEY": app.state.OPENAI_API_KEY,
         "status": True,
+        "OPENAI_API_BASE_URL": app.state.OPENAI_API_BASE_URL,
+        "OPENAI_API_KEY": app.state.OPENAI_API_KEY,
     }
 
 
@@ -186,6 +230,18 @@ def get_models(user=Depends(get_current_user)):
                 {"id": "dall-e-2", "name": "DALL·E 2"},
                 {"id": "dall-e-3", "name": "DALL·E 3"},
             ]
+        elif app.state.ENGINE == "comfyui":
+
+            r = requests.get(url=f"{app.state.COMFYUI_BASE_URL}/object_info")
+            info = r.json()
+
+            return list(
+                map(
+                    lambda model: {"id": model, "name": model},
+                    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0],
+                )
+            )
+
         else:
             r = requests.get(
                 url=f"{app.state.AUTOMATIC1111_BASE_URL}/sdapi/v1/sd-models"
@@ -207,6 +263,8 @@ async def get_default_model(user=Depends(get_admin_user)):
     try:
         if app.state.ENGINE == "openai":
             return {"model": app.state.MODEL if app.state.MODEL else "dall-e-2"}
+        elif app.state.ENGINE == "comfyui":
+            return {"model": app.state.MODEL if app.state.MODEL else ""}
         else:
             r = requests.get(url=f"{app.state.AUTOMATIC1111_BASE_URL}/sdapi/v1/options")
             options = r.json()
@@ -221,8 +279,10 @@ class UpdateModelForm(BaseModel):
 
 
 def set_model_handler(model: str):
-
     if app.state.ENGINE == "openai":
+        app.state.MODEL = model
+        return app.state.MODEL
+    if app.state.ENGINE == "comfyui":
         app.state.MODEL = model
         return app.state.MODEL
     else:
@@ -268,7 +328,24 @@ def save_b64_image(b64_str):
 
         return image_id
     except Exception as e:
-        print(f"Error saving image: {e}")
+        log.error(f"Error saving image: {e}")
+        return None
+
+
+def save_url_image(url):
+    image_id = str(uuid.uuid4())
+    file_path = IMAGE_CACHE_DIR.joinpath(f"{image_id}.png")
+
+    try:
+        r = requests.get(url)
+        r.raise_for_status()
+
+        with open(file_path, "wb") as image_file:
+            image_file.write(r.content)
+
+        return image_id
+    except Exception as e:
+        log.exception(f"Error saving image: {e}")
         return None
 
 
@@ -277,6 +354,8 @@ def generate_image(
     form_data: GenerateImageForm,
     user=Depends(get_current_user),
 ):
+
+    width, height = tuple(map(int, app.state.IMAGE_SIZE.split("x")))
 
     r = None
     try:
@@ -295,7 +374,7 @@ def generate_image(
             }
 
             r = requests.post(
-                url=f"https://api.openai.com/v1/images/generations",
+                url=f"{app.state.OPENAI_API_BASE_URL}/images/generations",
                 json=data,
                 headers=headers,
             )
@@ -315,11 +394,46 @@ def generate_image(
 
             return images
 
+        elif app.state.ENGINE == "comfyui":
+
+            data = {
+                "prompt": form_data.prompt,
+                "width": width,
+                "height": height,
+                "n": form_data.n,
+            }
+
+            if app.state.IMAGE_STEPS != None:
+                data["steps"] = app.state.IMAGE_STEPS
+
+            if form_data.negative_prompt != None:
+                data["negative_prompt"] = form_data.negative_prompt
+
+            data = ImageGenerationPayload(**data)
+
+            res = comfyui_generate_image(
+                app.state.MODEL,
+                data,
+                user.id,
+                app.state.COMFYUI_BASE_URL,
+            )
+            log.debug(f"res: {res}")
+
+            images = []
+
+            for image in res["data"]:
+                image_id = save_url_image(image["url"])
+                images.append({"url": f"/cache/image/generations/{image_id}.png"})
+                file_body_path = IMAGE_CACHE_DIR.joinpath(f"{image_id}.json")
+
+                with open(file_body_path, "w") as f:
+                    json.dump(data.model_dump(exclude_none=True), f)
+
+            log.debug(f"images: {images}")
+            return images
         else:
             if form_data.model:
                 set_model_handler(form_data.model)
-
-            width, height = tuple(map(int, app.state.IMAGE_SIZE.split("x")))
 
             data = {
                 "prompt": form_data.prompt,
@@ -341,7 +455,7 @@ def generate_image(
 
             res = r.json()
 
-            print(res)
+            log.debug(f"res: {res}")
 
             images = []
 

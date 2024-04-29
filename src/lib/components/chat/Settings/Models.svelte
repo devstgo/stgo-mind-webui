@@ -5,12 +5,15 @@
 	import {
 		createModel,
 		deleteModel,
+		downloadModel,
 		getOllamaUrls,
 		getOllamaVersion,
-		pullModel
+		pullModel,
+		cancelOllamaRequest,
+		uploadModel
 	} from '$lib/apis/ollama';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
-	import { WEBUI_NAME, models, user } from '$lib/stores';
+	import { WEBUI_NAME, models, MODEL_DOWNLOAD_POOL, user } from '$lib/stores';
 	import { splitStream } from '$lib/utils';
 	import { onMount, getContext } from 'svelte';
 	import { addLiteLLMModel, deleteLiteLLMModel, getLiteLLMModelInfo } from '$lib/apis/litellm';
@@ -32,7 +35,7 @@
 	let liteLLMRPM = '';
 	let liteLLMMaxTokens = '';
 
-	let deleteLiteLLMModelId = '';
+	let deleteLiteLLMModelName = '';
 
 	$: liteLLMModelName = liteLLMModel;
 
@@ -47,12 +50,6 @@
 	let showExperimentalOllama = false;
 	let ollamaVersion = '';
 	const MAX_PARALLEL_DOWNLOADS = 3;
-	const modelDownloadQueue = queue(
-		(task: { modelName: string }, cb) =>
-			pullModelHandlerProcessor({ modelName: task.modelName, callback: cb }),
-		MAX_PARALLEL_DOWNLOADS
-	);
-	let modelDownloadStatus: Record<string, any> = {};
 
 	let modelTransferring = false;
 	let modelTag = '';
@@ -60,11 +57,13 @@
 	let pullProgress = null;
 
 	let modelUploadMode = 'file';
-	let modelInputFile = '';
+	let modelInputFile: File[] | null = null;
 	let modelFileUrl = '';
 	let modelFileContent = `TEMPLATE """{{ .System }}\nUSER: {{ .Prompt }}\nASSISTANT: """\nPARAMETER num_ctx 4096\nPARAMETER stop "</s>"\nPARAMETER stop "USER:"\nPARAMETER stop "ASSISTANT:"`;
 	let modelFileDigest = '';
+
 	let uploadProgress = null;
+	let uploadMessage = '';
 
 	let deleteModelTag = '';
 
@@ -134,8 +133,9 @@
 	};
 
 	const pullModelHandler = async () => {
-		const sanitizedModelTag = modelTag.trim();
-		if (modelDownloadStatus[sanitizedModelTag]) {
+		const sanitizedModelTag = modelTag.trim().replace(/^ollama\s+(run|pull)\s+/, '');
+		console.log($MODEL_DOWNLOAD_POOL);
+		if ($MODEL_DOWNLOAD_POOL[sanitizedModelTag]) {
 			toast.error(
 				$i18n.t(`Model '{{modelTag}}' is already in queue for downloading.`, {
 					modelTag: sanitizedModelTag
@@ -143,40 +143,117 @@
 			);
 			return;
 		}
-		if (Object.keys(modelDownloadStatus).length === 3) {
+		if (Object.keys($MODEL_DOWNLOAD_POOL).length === MAX_PARALLEL_DOWNLOADS) {
 			toast.error(
 				$i18n.t('Maximum of 3 models can be downloaded simultaneously. Please try again later.')
 			);
 			return;
 		}
 
-		modelTransferring = true;
+		const res = await pullModel(localStorage.token, sanitizedModelTag, '0').catch((error) => {
+			toast.error(error);
+			return null;
+		});
 
-		modelDownloadQueue.push(
-			{ modelName: sanitizedModelTag },
-			async (data: { modelName: string; success: boolean; error?: Error }) => {
-				const { modelName } = data;
-				// Remove the downloaded model
-				delete modelDownloadStatus[modelName];
+		if (res) {
+			const reader = res.body
+				.pipeThrough(new TextDecoderStream())
+				.pipeThrough(splitStream('\n'))
+				.getReader();
 
-				console.log(data);
+			while (true) {
+				try {
+					const { value, done } = await reader.read();
+					if (done) break;
 
-				if (!data.success) {
-					toast.error(data.error);
-				} else {
-					toast.success(
-						$i18n.t(`Model '{{modelName}}' has been successfully downloaded.`, { modelName })
-					);
+					let lines = value.split('\n');
 
-					const notification = new Notification($WEBUI_NAME, {
-						body: $i18n.t(`Model '{{modelName}}' has been successfully downloaded.`, { modelName }),
-						icon: `${WEBUI_BASE_URL}/static/favicon.png`
-					});
+					for (const line of lines) {
+						if (line !== '') {
+							let data = JSON.parse(line);
+							console.log(data);
+							if (data.error) {
+								throw data.error;
+							}
+							if (data.detail) {
+								throw data.detail;
+							}
 
-					models.set(await getModels());
+							if (data.id) {
+								MODEL_DOWNLOAD_POOL.set({
+									...$MODEL_DOWNLOAD_POOL,
+									[sanitizedModelTag]: {
+										...$MODEL_DOWNLOAD_POOL[sanitizedModelTag],
+										requestId: data.id,
+										reader,
+										done: false
+									}
+								});
+								console.log(data);
+							}
+
+							if (data.status) {
+								if (data.digest) {
+									let downloadProgress = 0;
+									if (data.completed) {
+										downloadProgress = Math.round((data.completed / data.total) * 1000) / 10;
+									} else {
+										downloadProgress = 100;
+									}
+
+									MODEL_DOWNLOAD_POOL.set({
+										...$MODEL_DOWNLOAD_POOL,
+										[sanitizedModelTag]: {
+											...$MODEL_DOWNLOAD_POOL[sanitizedModelTag],
+											pullProgress: downloadProgress,
+											digest: data.digest
+										}
+									});
+								} else {
+									toast.success(data.status);
+
+									MODEL_DOWNLOAD_POOL.set({
+										...$MODEL_DOWNLOAD_POOL,
+										[sanitizedModelTag]: {
+											...$MODEL_DOWNLOAD_POOL[sanitizedModelTag],
+											done: data.status === 'success'
+										}
+									});
+								}
+							}
+						}
+					}
+				} catch (error) {
+					console.log(error);
+					if (typeof error !== 'string') {
+						error = error.message;
+					}
+
+					toast.error(error);
+					// opts.callback({ success: false, error, modelName: opts.modelName });
 				}
 			}
-		);
+
+			console.log($MODEL_DOWNLOAD_POOL[sanitizedModelTag]);
+
+			if ($MODEL_DOWNLOAD_POOL[sanitizedModelTag].done) {
+				toast.success(
+					$i18n.t(`Model '{{modelName}}' has been successfully downloaded.`, {
+						modelName: sanitizedModelTag
+					})
+				);
+
+				models.set(await getModels(localStorage.token));
+			} else {
+				toast.error('Download canceled');
+			}
+
+			delete $MODEL_DOWNLOAD_POOL[sanitizedModelTag];
+
+			MODEL_DOWNLOAD_POOL.set({
+				...$MODEL_DOWNLOAD_POOL
+			});
+		}
 
 		modelTag = '';
 		modelTransferring = false;
@@ -184,35 +261,32 @@
 
 	const uploadModelHandler = async () => {
 		modelTransferring = true;
-		uploadProgress = 0;
 
 		let uploaded = false;
 		let fileResponse = null;
 		let name = '';
 
 		if (modelUploadMode === 'file') {
-			const file = modelInputFile[0];
-			const formData = new FormData();
-			formData.append('file', file);
+			const file = modelInputFile ? modelInputFile[0] : null;
 
-			fileResponse = await fetch(`${WEBUI_API_BASE_URL}/utils/upload`, {
-				method: 'POST',
-				headers: {
-					...($user && { Authorization: `Bearer ${localStorage.token}` })
-				},
-				body: formData
-			}).catch((error) => {
-				console.log(error);
-				return null;
-			});
+			if (file) {
+				uploadMessage = 'Uploading...';
+
+				fileResponse = await uploadModel(localStorage.token, file, selectedOllamaUrlIdx).catch(
+					(error) => {
+						toast.error(error);
+						return null;
+					}
+				);
+			}
 		} else {
-			fileResponse = await fetch(`${WEBUI_API_BASE_URL}/utils/download?url=${modelFileUrl}`, {
-				method: 'GET',
-				headers: {
-					...($user && { Authorization: `Bearer ${localStorage.token}` })
-				}
-			}).catch((error) => {
-				console.log(error);
+			uploadProgress = 0;
+			fileResponse = await downloadModel(
+				localStorage.token,
+				modelFileUrl,
+				selectedOllamaUrlIdx
+			).catch((error) => {
+				toast.error(error);
 				return null;
 			});
 		}
@@ -235,6 +309,9 @@
 							let data = JSON.parse(line.replace(/^data: /, ''));
 
 							if (data.progress) {
+								if (uploadMessage) {
+									uploadMessage = '';
+								}
 								uploadProgress = data.progress;
 							}
 
@@ -253,6 +330,9 @@
 					console.log(error);
 				}
 			}
+		} else {
+			const error = await fileResponse?.json();
+			toast.error(error?.detail ?? error);
 		}
 
 		if (uploaded) {
@@ -318,7 +398,11 @@
 		}
 
 		modelFileUrl = '';
-		modelInputFile = '';
+
+		if (modelUploadInputElement) {
+			modelUploadInputElement.value = '';
+		}
+		modelInputFile = null;
 		modelTransferring = false;
 		uploadProgress = null;
 
@@ -340,63 +424,18 @@
 		models.set(await getModels());
 	};
 
-	const pullModelHandlerProcessor = async (opts: { modelName: string; callback: Function }) => {
-		const res = await pullModel(localStorage.token, opts.modelName, selectedOllamaUrlIdx).catch(
-			(error) => {
-				opts.callback({ success: false, error, modelName: opts.modelName });
-				return null;
-			}
-		);
+	const cancelModelPullHandler = async (model: string) => {
+		const { reader, requestId } = $MODEL_DOWNLOAD_POOL[model];
+		if (reader) {
+			await reader.cancel();
 
-		if (res) {
-			const reader = res.body
-				.pipeThrough(new TextDecoderStream())
-				.pipeThrough(splitStream('\n'))
-				.getReader();
-
-			while (true) {
-				try {
-					const { value, done } = await reader.read();
-					if (done) break;
-
-					let lines = value.split('\n');
-
-					for (const line of lines) {
-						if (line !== '') {
-							let data = JSON.parse(line);
-							if (data.error) {
-								throw data.error;
-							}
-							if (data.detail) {
-								throw data.detail;
-							}
-							if (data.status) {
-								if (data.digest) {
-									let downloadProgress = 0;
-									if (data.completed) {
-										downloadProgress = Math.round((data.completed / data.total) * 1000) / 10;
-									} else {
-										downloadProgress = 100;
-									}
-									modelDownloadStatus[opts.modelName] = {
-										pullProgress: downloadProgress,
-										digest: data.digest
-									};
-								} else {
-									toast.success(data.status);
-								}
-							}
-						}
-					}
-				} catch (error) {
-					console.log(error);
-					if (typeof error !== 'string') {
-						error = error.message;
-					}
-					opts.callback({ success: false, error, modelName: opts.modelName });
-				}
-			}
-			opts.callback({ success: true, modelName: opts.modelName });
+			await cancelOllamaRequest(localStorage.token, requestId);
+			delete $MODEL_DOWNLOAD_POOL[model];
+			MODEL_DOWNLOAD_POOL.set({
+				...$MODEL_DOWNLOAD_POOL
+			});
+			await deleteModel(localStorage.token, model);
+			toast.success(`${model} download has been canceled`);
 		}
 	};
 
@@ -435,7 +474,7 @@
 	};
 
 	const deleteLiteLLMModelHandler = async () => {
-		const res = await deleteLiteLLMModel(localStorage.token, deleteLiteLLMModelId).catch(
+		const res = await deleteLiteLLMModel(localStorage.token, deleteLiteLLMModelName).catch(
 			(error) => {
 				toast.error(error);
 				return null;
@@ -448,7 +487,7 @@
 			}
 		}
 
-		deleteLiteLLMModelId = '';
+		deleteLiteLLMModelName = '';
 		liteLLMModelInfo = await getLiteLLMModelInfo(localStorage.token);
 		models.set(await getModels());
 	};
@@ -594,22 +633,60 @@
 							>
 						</div>
 
-						{#if Object.keys(modelDownloadStatus).length > 0}
-							{#each Object.keys(modelDownloadStatus) as model}
-								<div class="flex flex-col">
-									<div class="font-medium mb-1">{model}</div>
-									<div class="">
-										<div
-											class="dark:bg-gray-600 bg-gray-500 text-xs font-medium text-gray-100 text-center p-0.5 leading-none rounded-full"
-											style="width: {Math.max(15, modelDownloadStatus[model].pullProgress ?? 0)}%"
-										>
-											{modelDownloadStatus[model].pullProgress ?? 0}%
-										</div>
-										<div class="mt-1 text-xs dark:text-gray-500" style="font-size: 0.5rem;">
-											{modelDownloadStatus[model].digest}
+						{#if Object.keys($MODEL_DOWNLOAD_POOL).length > 0}
+							{#each Object.keys($MODEL_DOWNLOAD_POOL) as model}
+								{#if 'pullProgress' in $MODEL_DOWNLOAD_POOL[model]}
+									<div class="flex flex-col">
+										<div class="font-medium mb-1">{model}</div>
+										<div class="">
+											<div class="flex flex-row justify-between space-x-4 pr-2">
+												<div class=" flex-1">
+													<div
+														class="dark:bg-gray-600 bg-gray-500 text-xs font-medium text-gray-100 text-center p-0.5 leading-none rounded-full"
+														style="width: {Math.max(
+															15,
+															$MODEL_DOWNLOAD_POOL[model].pullProgress ?? 0
+														)}%"
+													>
+														{$MODEL_DOWNLOAD_POOL[model].pullProgress ?? 0}%
+													</div>
+												</div>
+
+												<Tooltip content="Cancel">
+													<button
+														class="text-gray-800 dark:text-gray-100"
+														on:click={() => {
+															cancelModelPullHandler(model);
+														}}
+													>
+														<svg
+															class="w-4 h-4 text-gray-800 dark:text-white"
+															aria-hidden="true"
+															xmlns="http://www.w3.org/2000/svg"
+															width="24"
+															height="24"
+															fill="currentColor"
+															viewBox="0 0 24 24"
+														>
+															<path
+																stroke="currentColor"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+																stroke-width="2"
+																d="M6 18 17.94 6M18 18 6.06 6"
+															/>
+														</svg>
+													</button>
+												</Tooltip>
+											</div>
+											{#if 'digest' in $MODEL_DOWNLOAD_POOL[model]}
+												<div class="mt-1 text-xs dark:text-gray-500" style="font-size: 0.5rem;">
+													{$MODEL_DOWNLOAD_POOL[model].digest}
+												</div>
+											{/if}
 										</div>
 									</div>
-								</div>
+								{/if}
 							{/each}
 						{/if}
 					</div>
@@ -715,7 +792,7 @@
 
 											<button
 												type="button"
-												class="w-full rounded-lg text-left py-2 px-4 dark:text-gray-300 dark:bg-gray-850"
+												class="w-full rounded-lg text-left py-2 px-4 bg-white dark:text-gray-300 dark:bg-gray-850"
 												on:click={() => {
 													modelUploadInputElement.click();
 												}}
@@ -730,7 +807,7 @@
 									{:else}
 										<div class="flex-1 {modelFileUrl !== '' ? 'mr-2' : ''}">
 											<input
-												class="w-full rounded-lg text-left py-2 px-4 dark:text-gray-300 dark:bg-gray-850 outline-none {modelFileUrl !==
+												class="w-full rounded-lg text-left py-2 px-4 bg-white dark:text-gray-300 dark:bg-gray-850 outline-none {modelFileUrl !==
 												''
 													? 'mr-2'
 													: ''}"
@@ -745,7 +822,7 @@
 
 								{#if (modelUploadMode === 'file' && modelInputFile && modelInputFile.length > 0) || (modelUploadMode === 'url' && modelFileUrl !== '')}
 									<button
-										class="px-3 text-gray-100 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded transition"
+										class="px-2.5 bg-gray-100 hover:bg-gray-200 text-gray-800 dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-gray-100 rounded-lg disabled:cursor-not-allowed transition"
 										type="submit"
 										disabled={modelTransferring}
 									>
@@ -800,7 +877,7 @@
 										<div class=" my-2.5 text-sm font-medium">{$i18n.t('Modelfile Content')}</div>
 										<textarea
 											bind:value={modelFileContent}
-											class="w-full rounded py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none resize-none"
+											class="w-full rounded-lg py-2 px-4 text-sm bg-gray-100 dark:text-gray-100 dark:bg-gray-850 outline-none resize-none"
 											rows="6"
 										/>
 									</div>
@@ -815,7 +892,23 @@
 								>
 							</div>
 
-							{#if uploadProgress !== null}
+							{#if uploadMessage}
+								<div class="mt-2">
+									<div class=" mb-2 text-xs">{$i18n.t('Upload Progress')}</div>
+
+									<div class="w-full rounded-full dark:bg-gray-800">
+										<div
+											class="dark:bg-gray-600 bg-gray-500 text-xs font-medium text-gray-100 text-center p-0.5 leading-none rounded-full"
+											style="width: 100%"
+										>
+											{uploadMessage}
+										</div>
+									</div>
+									<div class="mt-1 text-xs dark:text-gray-500" style="font-size: 0.5rem;">
+										{modelFileDigest}
+									</div>
+								</div>
+							{:else if uploadProgress !== null}
 								<div class="mt-2">
 									<div class=" mb-2 text-xs">{$i18n.t('Upload Progress')}</div>
 
@@ -996,14 +1089,14 @@
 								<div class="flex-1 mr-2">
 									<select
 										class="w-full rounded-lg py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-850 outline-none"
-										bind:value={deleteLiteLLMModelId}
+										bind:value={deleteLiteLLMModelName}
 										placeholder={$i18n.t('Select a model')}
 									>
-										{#if !deleteLiteLLMModelId}
+										{#if !deleteLiteLLMModelName}
 											<option value="" disabled selected>{$i18n.t('Select a model')}</option>
 										{/if}
 										{#each liteLLMModelInfo as model}
-											<option value={model.model_info.id} class="bg-gray-100 dark:bg-gray-700"
+											<option value={model.model_name} class="bg-gray-100 dark:bg-gray-700"
 												>{model.model_name}</option
 											>
 										{/each}

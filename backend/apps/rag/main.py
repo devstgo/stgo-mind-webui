@@ -8,19 +8,19 @@ from fastapi import (
     Form,
 )
 from fastapi.middleware.cors import CORSMiddleware
-import os, shutil
+import os, shutil, logging, re
 
 from pathlib import Path
 from typing import List
 
-from sentence_transformers import SentenceTransformer
-from chromadb.utils import embedding_functions
+from chromadb.utils.batch_utils import create_batches
 
 from langchain_community.document_loaders import (
     WebBaseLoader,
     TextLoader,
     PyPDFLoader,
     CSVLoader,
+    BSHTMLLoader,
     Docx2txtLoader,
     UnstructuredEPubLoader,
     UnstructuredWordDocumentLoader,
@@ -37,6 +37,7 @@ import mimetypes
 import uuid
 import json
 
+import sentence_transformers
 
 from apps.web.models.documents import (
     Documents,
@@ -44,7 +45,14 @@ from apps.web.models.documents import (
     DocumentResponse,
 )
 
-from apps.rag.utils import query_doc, query_collection
+from apps.rag.utils import (
+    get_model_path,
+    get_embedding_function,
+    query_doc,
+    query_doc_with_hybrid_search,
+    query_collection,
+    query_collection_with_hybrid_search,
+)
 
 from utils.misc import (
     calculate_sha256,
@@ -53,11 +61,25 @@ from utils.misc import (
     extract_folders_after_data_docs,
 )
 from utils.utils import get_current_user, get_admin_user
+
 from config import (
+    SRC_LOG_LEVELS,
     UPLOAD_DIR,
     DOCS_DIR,
+    RAG_TOP_K,
+    RAG_RELEVANCE_THRESHOLD,
+    RAG_EMBEDDING_ENGINE,
     RAG_EMBEDDING_MODEL,
-    RAG_EMBEDDING_MODEL_DEVICE_TYPE,
+    RAG_EMBEDDING_MODEL_AUTO_UPDATE,
+    RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE,
+    ENABLE_RAG_HYBRID_SEARCH,
+    RAG_RERANKING_MODEL,
+    PDF_EXTRACT_IMAGES,
+    RAG_RERANKING_MODEL_AUTO_UPDATE,
+    RAG_RERANKING_MODEL_TRUST_REMOTE_CODE,
+    RAG_OPENAI_API_BASE_URL,
+    RAG_OPENAI_API_KEY,
+    DEVICE_TYPE,
     CHROMA_CLIENT,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
@@ -66,33 +88,79 @@ from config import (
 
 from constants import ERROR_MESSAGES
 
-#
-# if RAG_EMBEDDING_MODEL:
-#    sentence_transformer_ef = SentenceTransformer(
-#        model_name_or_path=RAG_EMBEDDING_MODEL,
-#        cache_folder=RAG_EMBEDDING_MODEL_DIR,
-#        device=RAG_EMBEDDING_MODEL_DEVICE_TYPE,
-#    )
-
+log = logging.getLogger(__name__)
+log.setLevel(SRC_LOG_LEVELS["RAG"])
 
 app = FastAPI()
 
-app.state.PDF_EXTRACT_IMAGES = False
+app.state.TOP_K = RAG_TOP_K
+app.state.RELEVANCE_THRESHOLD = RAG_RELEVANCE_THRESHOLD
+
+app.state.ENABLE_RAG_HYBRID_SEARCH = ENABLE_RAG_HYBRID_SEARCH
+
 app.state.CHUNK_SIZE = CHUNK_SIZE
 app.state.CHUNK_OVERLAP = CHUNK_OVERLAP
-app.state.RAG_TEMPLATE = RAG_TEMPLATE
-app.state.RAG_EMBEDDING_MODEL = RAG_EMBEDDING_MODEL
-app.state.TOP_K = 4
 
-app.state.sentence_transformer_ef = (
-    embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=app.state.RAG_EMBEDDING_MODEL,
-        device=RAG_EMBEDDING_MODEL_DEVICE_TYPE,
-    )
+app.state.RAG_EMBEDDING_ENGINE = RAG_EMBEDDING_ENGINE
+app.state.RAG_EMBEDDING_MODEL = RAG_EMBEDDING_MODEL
+app.state.RAG_RERANKING_MODEL = RAG_RERANKING_MODEL
+app.state.RAG_TEMPLATE = RAG_TEMPLATE
+
+app.state.OPENAI_API_BASE_URL = RAG_OPENAI_API_BASE_URL
+app.state.OPENAI_API_KEY = RAG_OPENAI_API_KEY
+
+app.state.PDF_EXTRACT_IMAGES = PDF_EXTRACT_IMAGES
+
+
+def update_embedding_model(
+    embedding_model: str,
+    update_model: bool = False,
+):
+    if embedding_model and app.state.RAG_EMBEDDING_ENGINE == "":
+        app.state.sentence_transformer_ef = sentence_transformers.SentenceTransformer(
+            get_model_path(embedding_model, update_model),
+            device=DEVICE_TYPE,
+            trust_remote_code=RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE,
+        )
+    else:
+        app.state.sentence_transformer_ef = None
+
+
+def update_reranking_model(
+    reranking_model: str,
+    update_model: bool = False,
+):
+    if reranking_model:
+        app.state.sentence_transformer_rf = sentence_transformers.CrossEncoder(
+            get_model_path(reranking_model, update_model),
+            device=DEVICE_TYPE,
+            trust_remote_code=RAG_RERANKING_MODEL_TRUST_REMOTE_CODE,
+        )
+    else:
+        app.state.sentence_transformer_rf = None
+
+
+update_embedding_model(
+    app.state.RAG_EMBEDDING_MODEL,
+    RAG_EMBEDDING_MODEL_AUTO_UPDATE,
+)
+
+update_reranking_model(
+    app.state.RAG_RERANKING_MODEL,
+    RAG_RERANKING_MODEL_AUTO_UPDATE,
 )
 
 
+app.state.EMBEDDING_FUNCTION = get_embedding_function(
+    app.state.RAG_EMBEDDING_ENGINE,
+    app.state.RAG_EMBEDDING_MODEL,
+    app.state.sentence_transformer_ef,
+    app.state.OPENAI_API_KEY,
+    app.state.OPENAI_API_BASE_URL,
+)
+
 origins = ["*"]
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -111,39 +179,6 @@ class StoreWebForm(CollectionNameForm):
     url: str
 
 
-def store_data_in_vector_db(data, collection_name, overwrite: bool = False) -> bool:
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=app.state.CHUNK_SIZE, chunk_overlap=app.state.CHUNK_OVERLAP
-    )
-    docs = text_splitter.split_documents(data)
-
-    texts = [doc.page_content for doc in docs]
-    metadatas = [doc.metadata for doc in docs]
-
-    try:
-        if overwrite:
-            for collection in CHROMA_CLIENT.list_collections():
-                if collection_name == collection.name:
-                    print(f"deleting existing collection {collection_name}")
-                    CHROMA_CLIENT.delete_collection(name=collection_name)
-
-        collection = CHROMA_CLIENT.create_collection(
-            name=collection_name,
-            embedding_function=app.state.sentence_transformer_ef,
-        )
-
-        collection.add(
-            documents=texts, metadatas=metadatas, ids=[str(uuid.uuid1()) for _ in texts]
-        )
-        return True
-    except Exception as e:
-        print(e)
-        if e.__class__.__name__ == "UniqueConstraintError":
-            return True
-
-        return False
-
-
 @app.get("/")
 async def get_status():
     return {
@@ -151,38 +186,110 @@ async def get_status():
         "chunk_size": app.state.CHUNK_SIZE,
         "chunk_overlap": app.state.CHUNK_OVERLAP,
         "template": app.state.RAG_TEMPLATE,
+        "embedding_engine": app.state.RAG_EMBEDDING_ENGINE,
         "embedding_model": app.state.RAG_EMBEDDING_MODEL,
+        "reranking_model": app.state.RAG_RERANKING_MODEL,
     }
 
 
-@app.get("/embedding/model")
-async def get_embedding_model(user=Depends(get_admin_user)):
+@app.get("/embedding")
+async def get_embedding_config(user=Depends(get_admin_user)):
     return {
         "status": True,
+        "embedding_engine": app.state.RAG_EMBEDDING_ENGINE,
         "embedding_model": app.state.RAG_EMBEDDING_MODEL,
+        "openai_config": {
+            "url": app.state.OPENAI_API_BASE_URL,
+            "key": app.state.OPENAI_API_KEY,
+        },
     }
+
+
+@app.get("/reranking")
+async def get_reraanking_config(user=Depends(get_admin_user)):
+    return {"status": True, "reranking_model": app.state.RAG_RERANKING_MODEL}
+
+
+class OpenAIConfigForm(BaseModel):
+    url: str
+    key: str
 
 
 class EmbeddingModelUpdateForm(BaseModel):
+    openai_config: Optional[OpenAIConfigForm] = None
+    embedding_engine: str
     embedding_model: str
 
 
-@app.post("/embedding/model/update")
-async def update_embedding_model(
+@app.post("/embedding/update")
+async def update_embedding_config(
     form_data: EmbeddingModelUpdateForm, user=Depends(get_admin_user)
 ):
-    app.state.RAG_EMBEDDING_MODEL = form_data.embedding_model
-    app.state.sentence_transformer_ef = (
-        embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=app.state.RAG_EMBEDDING_MODEL,
-            device=RAG_EMBEDDING_MODEL_DEVICE_TYPE,
-        )
+    log.info(
+        f"Updating embedding model: {app.state.RAG_EMBEDDING_MODEL} to {form_data.embedding_model}"
     )
+    try:
+        app.state.RAG_EMBEDDING_ENGINE = form_data.embedding_engine
+        app.state.RAG_EMBEDDING_MODEL = form_data.embedding_model
 
-    return {
-        "status": True,
-        "embedding_model": app.state.RAG_EMBEDDING_MODEL,
-    }
+        if app.state.RAG_EMBEDDING_ENGINE in ["ollama", "openai"]:
+            if form_data.openai_config != None:
+                app.state.OPENAI_API_BASE_URL = form_data.openai_config.url
+                app.state.OPENAI_API_KEY = form_data.openai_config.key
+
+        update_embedding_model(app.state.RAG_EMBEDDING_MODEL, True)
+
+        app.state.EMBEDDING_FUNCTION = get_embedding_function(
+            app.state.RAG_EMBEDDING_ENGINE,
+            app.state.RAG_EMBEDDING_MODEL,
+            app.state.sentence_transformer_ef,
+            app.state.OPENAI_API_KEY,
+            app.state.OPENAI_API_BASE_URL,
+        )
+
+        return {
+            "status": True,
+            "embedding_engine": app.state.RAG_EMBEDDING_ENGINE,
+            "embedding_model": app.state.RAG_EMBEDDING_MODEL,
+            "openai_config": {
+                "url": app.state.OPENAI_API_BASE_URL,
+                "key": app.state.OPENAI_API_KEY,
+            },
+        }
+    except Exception as e:
+        log.exception(f"Problem updating embedding model: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ERROR_MESSAGES.DEFAULT(e),
+        )
+
+
+class RerankingModelUpdateForm(BaseModel):
+    reranking_model: str
+
+
+@app.post("/reranking/update")
+async def update_reranking_config(
+    form_data: RerankingModelUpdateForm, user=Depends(get_admin_user)
+):
+    log.info(
+        f"Updating reranking model: {app.state.RAG_RERANKING_MODEL} to {form_data.reranking_model}"
+    )
+    try:
+        app.state.RAG_RERANKING_MODEL = form_data.reranking_model
+
+        update_reranking_model(app.state.RAG_RERANKING_MODEL, True)
+
+        return {
+            "status": True,
+            "reranking_model": app.state.RAG_RERANKING_MODEL,
+        }
+    except Exception as e:
+        log.exception(f"Problem updating reranking model: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ERROR_MESSAGES.DEFAULT(e),
+        )
 
 
 @app.get("/config")
@@ -237,12 +344,16 @@ async def get_query_settings(user=Depends(get_admin_user)):
         "status": True,
         "template": app.state.RAG_TEMPLATE,
         "k": app.state.TOP_K,
+        "r": app.state.RELEVANCE_THRESHOLD,
+        "hybrid": app.state.ENABLE_RAG_HYBRID_SEARCH,
     }
 
 
 class QuerySettingsForm(BaseModel):
     k: Optional[int] = None
+    r: Optional[float] = None
     template: Optional[str] = None
+    hybrid: Optional[bool] = None
 
 
 @app.post("/query/settings/update")
@@ -251,13 +362,23 @@ async def update_query_settings(
 ):
     app.state.RAG_TEMPLATE = form_data.template if form_data.template else RAG_TEMPLATE
     app.state.TOP_K = form_data.k if form_data.k else 4
-    return {"status": True, "template": app.state.RAG_TEMPLATE}
+    app.state.RELEVANCE_THRESHOLD = form_data.r if form_data.r else 0.0
+    app.state.ENABLE_RAG_HYBRID_SEARCH = form_data.hybrid if form_data.hybrid else False
+    return {
+        "status": True,
+        "template": app.state.RAG_TEMPLATE,
+        "k": app.state.TOP_K,
+        "r": app.state.RELEVANCE_THRESHOLD,
+        "hybrid": app.state.ENABLE_RAG_HYBRID_SEARCH,
+    }
 
 
 class QueryDocForm(BaseModel):
     collection_name: str
     query: str
     k: Optional[int] = None
+    r: Optional[float] = None
+    hybrid: Optional[bool] = None
 
 
 @app.post("/query/doc")
@@ -265,16 +386,25 @@ def query_doc_handler(
     form_data: QueryDocForm,
     user=Depends(get_current_user),
 ):
-
     try:
-        return query_doc(
-            collection_name=form_data.collection_name,
-            query=form_data.query,
-            k=form_data.k if form_data.k else app.state.TOP_K,
-            embedding_function=app.state.sentence_transformer_ef,
-        )
+        if app.state.ENABLE_RAG_HYBRID_SEARCH:
+            return query_doc_with_hybrid_search(
+                collection_name=form_data.collection_name,
+                query=form_data.query,
+                embeddings_function=app.state.EMBEDDING_FUNCTION,
+                reranking_function=app.state.sentence_transformer_rf,
+                k=form_data.k if form_data.k else app.state.TOP_K,
+                r=form_data.r if form_data.r else app.state.RELEVANCE_THRESHOLD,
+            )
+        else:
+            return query_doc(
+                collection_name=form_data.collection_name,
+                query=form_data.query,
+                embeddings_function=app.state.EMBEDDING_FUNCTION,
+                k=form_data.k if form_data.k else app.state.TOP_K,
+            )
     except Exception as e:
-        print(e)
+        log.exception(e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.DEFAULT(e),
@@ -285,6 +415,8 @@ class QueryCollectionsForm(BaseModel):
     collection_names: List[str]
     query: str
     k: Optional[int] = None
+    r: Optional[float] = None
+    hybrid: Optional[bool] = None
 
 
 @app.post("/query/collection")
@@ -292,12 +424,30 @@ def query_collection_handler(
     form_data: QueryCollectionsForm,
     user=Depends(get_current_user),
 ):
-    return query_collection(
-        collection_names=form_data.collection_names,
-        query=form_data.query,
-        k=form_data.k if form_data.k else app.state.TOP_K,
-        embedding_function=app.state.sentence_transformer_ef,
-    )
+    try:
+        if app.state.ENABLE_RAG_HYBRID_SEARCH:
+            return query_collection_with_hybrid_search(
+                collection_names=form_data.collection_names,
+                query=form_data.query,
+                embeddings_function=app.state.EMBEDDING_FUNCTION,
+                reranking_function=app.state.sentence_transformer_rf,
+                k=form_data.k if form_data.k else app.state.TOP_K,
+                r=form_data.r if form_data.r else app.state.RELEVANCE_THRESHOLD,
+            )
+        else:
+            return query_collection(
+                collection_names=form_data.collection_names,
+                query=form_data.query,
+                embeddings_function=app.state.EMBEDDING_FUNCTION,
+                k=form_data.k if form_data.k else app.state.TOP_K,
+            )
+
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(e),
+        )
 
 
 @app.post("/web")
@@ -318,11 +468,84 @@ def store_web(form_data: StoreWebForm, user=Depends(get_current_user)):
             "filename": form_data.url,
         }
     except Exception as e:
-        print(e)
+        log.exception(e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.DEFAULT(e),
         )
+
+
+def store_data_in_vector_db(data, collection_name, overwrite: bool = False) -> bool:
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=app.state.CHUNK_SIZE,
+        chunk_overlap=app.state.CHUNK_OVERLAP,
+        add_start_index=True,
+    )
+
+    docs = text_splitter.split_documents(data)
+
+    if len(docs) > 0:
+        log.info(f"store_data_in_vector_db {docs}")
+        return store_docs_in_vector_db(docs, collection_name, overwrite), None
+    else:
+        raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
+
+
+def store_text_in_vector_db(
+    text, metadata, collection_name, overwrite: bool = False
+) -> bool:
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=app.state.CHUNK_SIZE,
+        chunk_overlap=app.state.CHUNK_OVERLAP,
+        add_start_index=True,
+    )
+    docs = text_splitter.create_documents([text], metadatas=[metadata])
+    return store_docs_in_vector_db(docs, collection_name, overwrite)
+
+
+def store_docs_in_vector_db(docs, collection_name, overwrite: bool = False) -> bool:
+    log.info(f"store_docs_in_vector_db {docs} {collection_name}")
+
+    texts = [doc.page_content for doc in docs]
+    metadatas = [doc.metadata for doc in docs]
+
+    try:
+        if overwrite:
+            for collection in CHROMA_CLIENT.list_collections():
+                if collection_name == collection.name:
+                    log.info(f"deleting existing collection {collection_name}")
+                    CHROMA_CLIENT.delete_collection(name=collection_name)
+
+        collection = CHROMA_CLIENT.create_collection(name=collection_name)
+
+        embedding_func = get_embedding_function(
+            app.state.RAG_EMBEDDING_ENGINE,
+            app.state.RAG_EMBEDDING_MODEL,
+            app.state.sentence_transformer_ef,
+            app.state.OPENAI_API_KEY,
+            app.state.OPENAI_API_BASE_URL,
+        )
+
+        embedding_texts = list(map(lambda x: x.replace("\n", " "), texts))
+        embeddings = embedding_func(embedding_texts)
+
+        for batch in create_batches(
+            api=CHROMA_CLIENT,
+            ids=[str(uuid.uuid1()) for _ in texts],
+            metadatas=metadatas,
+            embeddings=embeddings,
+            documents=texts,
+        ):
+            collection.add(*batch)
+
+        return True
+    except Exception as e:
+        log.exception(e)
+        if e.__class__.__name__ == "UniqueConstraintError":
+            return True
+
+        return False
 
 
 def get_loader(filename: str, file_content_type: str, file_path: str):
@@ -382,6 +605,8 @@ def get_loader(filename: str, file_content_type: str, file_path: str):
         loader = UnstructuredRSTLoader(file_path, mode="elements")
     elif file_ext == "xml":
         loader = UnstructuredXMLLoader(file_path)
+    elif file_ext in ["htm", "html"]:
+        loader = BSHTMLLoader(file_path, open_encoding="unicode_escape")
     elif file_ext == "md":
         loader = UnstructuredMarkdownLoader(file_path)
     elif file_content_type == "application/epub+zip":
@@ -416,10 +641,13 @@ def store_doc(
 ):
     # "https://www.gutenberg.org/files/1727/1727-h/1727-h.htm"
 
-    print(file.content_type)
+    log.info(f"file.content_type: {file.content_type}")
     try:
-        filename = file.filename
+        unsanitized_filename = file.filename
+        filename = os.path.basename(unsanitized_filename)
+
         file_path = f"{UPLOAD_DIR}/{filename}"
+
         contents = file.file.read()
         with open(file_path, "wb") as f:
             f.write(contents)
@@ -430,24 +658,26 @@ def store_doc(
             collection_name = calculate_sha256(f)[:63]
         f.close()
 
-        loader, known_type = get_loader(file.filename, file.content_type, file_path)
+        loader, known_type = get_loader(filename, file.content_type, file_path)
         data = loader.load()
-        result = store_data_in_vector_db(data, collection_name)
 
-        if result:
-            return {
-                "status": True,
-                "collection_name": collection_name,
-                "filename": filename,
-                "known_type": known_type,
-            }
-        else:
+        try:
+            result = store_data_in_vector_db(data, collection_name)
+
+            if result:
+                return {
+                    "status": True,
+                    "collection_name": collection_name,
+                    "filename": filename,
+                    "known_type": known_type,
+                }
+        except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=ERROR_MESSAGES.DEFAULT(),
+                detail=e,
             )
     except Exception as e:
-        print(e)
+        log.exception(e)
         if "No pandoc was found" in str(e):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -458,6 +688,37 @@ def store_doc(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT(e),
             )
+
+
+class TextRAGForm(BaseModel):
+    name: str
+    content: str
+    collection_name: Optional[str] = None
+
+
+@app.post("/text")
+def store_text(
+    form_data: TextRAGForm,
+    user=Depends(get_current_user),
+):
+
+    collection_name = form_data.collection_name
+    if collection_name == None:
+        collection_name = calculate_sha256_string(form_data.content)
+
+    result = store_text_in_vector_db(
+        form_data.content,
+        metadata={"name": form_data.name, "created_by": user.id},
+        collection_name=collection_name,
+    )
+
+    if result:
+        return {"status": True, "collection_name": collection_name}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ERROR_MESSAGES.DEFAULT(),
+        )
 
 
 @app.get("/scan")
@@ -478,41 +739,45 @@ def scan_docs_dir(user=Depends(get_admin_user)):
                 )
                 data = loader.load()
 
-                result = store_data_in_vector_db(data, collection_name)
+                try:
+                    result = store_data_in_vector_db(data, collection_name)
 
-                if result:
-                    sanitized_filename = sanitize_filename(filename)
-                    doc = Documents.get_doc_by_name(sanitized_filename)
+                    if result:
+                        sanitized_filename = sanitize_filename(filename)
+                        doc = Documents.get_doc_by_name(sanitized_filename)
 
-                    if doc == None:
-                        doc = Documents.insert_new_doc(
-                            user.id,
-                            DocumentForm(
-                                **{
-                                    "name": sanitized_filename,
-                                    "title": filename,
-                                    "collection_name": collection_name,
-                                    "filename": filename,
-                                    "content": (
-                                        json.dumps(
-                                            {
-                                                "tags": list(
-                                                    map(
-                                                        lambda name: {"name": name},
-                                                        tags,
+                        if doc == None:
+                            doc = Documents.insert_new_doc(
+                                user.id,
+                                DocumentForm(
+                                    **{
+                                        "name": sanitized_filename,
+                                        "title": filename,
+                                        "collection_name": collection_name,
+                                        "filename": filename,
+                                        "content": (
+                                            json.dumps(
+                                                {
+                                                    "tags": list(
+                                                        map(
+                                                            lambda name: {"name": name},
+                                                            tags,
+                                                        )
                                                     )
-                                                )
-                                            }
-                                        )
-                                        if len(tags)
-                                        else "{}"
-                                    ),
-                                }
-                            ),
-                        )
+                                                }
+                                            )
+                                            if len(tags)
+                                            else "{}"
+                                        ),
+                                    }
+                                ),
+                            )
+                except Exception as e:
+                    log.exception(e)
+                    pass
 
         except Exception as e:
-            print(e)
+            log.exception(e)
 
     return True
 
@@ -533,11 +798,11 @@ def reset(user=Depends(get_admin_user)) -> bool:
             elif os.path.isdir(file_path):
                 shutil.rmtree(file_path)
         except Exception as e:
-            print("Failed to delete %s. Reason: %s" % (file_path, e))
+            log.error("Failed to delete %s. Reason: %s" % (file_path, e))
 
     try:
         CHROMA_CLIENT.reset()
     except Exception as e:
-        print(e)
+        log.exception(e)
 
     return True
