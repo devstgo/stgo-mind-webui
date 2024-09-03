@@ -54,7 +54,7 @@
 	};
 </script>
 
-<div class=" flex w-full">
+<div class=" flex w-full request-message bg-input-video rounded-lg border border-gray-100 dark:border-gray-850 p-5">
 	<ProfileImage
 		src={message.user
 			? $modelfiles.find((modelfile) => modelfile.tagName === message.user)?.imageUrl ?? '/user.png'

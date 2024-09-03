@@ -70,7 +70,7 @@ try:
 except ImportError:
     log.warning("dotenv not installed, skipping...")
 
-WEBUI_NAME = os.environ.get("WEBUI_NAME", "MIND STGO")
+WEBUI_NAME = os.environ.get("WEBUI_NAME", "gateway Assistant AI")
 #if WEBUI_NAME != "Open WebUI":
 #    WEBUI_NAME += " (Open WebUI)"
 

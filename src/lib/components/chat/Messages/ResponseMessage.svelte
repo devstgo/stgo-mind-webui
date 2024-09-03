@@ -323,7 +323,7 @@
 </script>
 
 {#key message.id}
-	<div class=" flex w-full message-{message.id}" id="message-{message.id}">
+	<div class=" flex w-full response-message bg-input-video rounded-lg border border-gray-100 dark:border-gray-850 p-5 message-{message.id}" id="message-{message.id}">
 		<ProfileImage
 			src={modelfiles[message.model]?.imageUrl ?? `${WEBUI_BASE_URL}/static/favicon.png`}
 		/>

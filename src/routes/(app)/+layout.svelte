@@ -195,7 +195,7 @@
 
 <div class="app relative">
 	<div
-		class=" text-gray-700 dark:text-gray-100 bg-white dark:bg-gray-900 min-h-screen overflow-auto flex flex-row"
+		class=" text-gray-700 dark:text-gray-100 min-h-screen overflow-auto flex flex-row"
 	>
 		{#if loaded}
 			{#if !['user', 'admin'].includes($user.role)}
@@ -296,6 +296,16 @@
 			<ChangelogModal bind:show={$showChangelog} />
 			<slot />
 		{/if}
+		<div class="absolute -z-10 inset-0 max-h-screen overflow-hidden">
+		<video
+			class="w-auto min-w-full min-h-full max-w-none xl:max-w-full"
+			src="https://demos.stgo.dev/gateway/repository-dev-portal/background-ai.mp4"
+			autoPlay
+			loop
+			controls={false}
+			muted
+			/>
+		</div>
 	</div>
 </div>
 

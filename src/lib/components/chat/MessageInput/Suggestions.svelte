@@ -17,7 +17,7 @@
 				class="{promptIdx > 1 ? 'hidden sm:inline-flex' : ''} basis-full sm:basis-1/2 p-[5px] px-1"
 			>
 				<button
-					class=" flex-1 flex justify-between w-full h-full px-4 py-2.5 bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 rounded-2xl transition group"
+					class=" flex-1 flex justify-between w-full h-full px-4 py-2.5 bg-input-video hover:bg-gray-100 border border-gray-100 dark:border-gray-850 dark:hover:bg-gray-800 rounded-2xl transition group"
 					on:click={() => {
 						submitPrompt(prompt.content);
 					}}
@@ -34,7 +34,7 @@
 					</div>
 
 					<div
-						class="self-center p-1 rounded-lg text-gray-50 group-hover:text-gray-800 dark:text-gray-850 dark:group-hover:text-gray-100 transition"
+						class="self-center p-1 rounded-lg text-gray-50 group-hover:text-gray-800 dark:text-white dark:group-hover:text-gray-100 transition"
 					>
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
