@@ -8,6 +8,7 @@
 	import { createNewPrompt, deletePromptByCommand, getPrompts } from '$lib/apis/prompts';
 	import { error } from '@sveltejs/kit';
 	import { goto } from '$app/navigation';
+	import { base } from "$app/paths";
 
 	const i18n = getContext('i18n');
 
@@ -137,7 +138,7 @@
 								on:click={() => {
 									// console.log(modelfile);
 									sessionStorage.prompt = JSON.stringify(prompt);
-									goto('/prompts/create');
+									goto(base + '/prompts/create');
 								}}
 							>
 								<svg

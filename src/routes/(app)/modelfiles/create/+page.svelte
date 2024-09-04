@@ -205,7 +205,7 @@ SYSTEM """${system}"""`.replace(/^\s*\n/gm, '');
 					categories: Object.keys(categories).filter((category) => categories[category]),
 					user: modelfileCreator !== null ? modelfileCreator : undefined
 				});
-				await goto('/modelfiles');
+				await goto(base + '/modelfiles');
 			}
 		}
 		loading = false;

@@ -138,7 +138,7 @@
 
 		if (res) {
 			if ($chatId === id) {
-				goto('/');
+				goto(base + '/');
 			}
 
 			await chats.set(await getChatList(localStorage.token));
@@ -186,7 +186,7 @@
 				on:click={async () => {
 					selectedChatId = null;
 
-					await goto('/');
+					await goto(base + '/');
 					const newChatButton = document.getElementById('new-chat-button');
 					setTimeout(() => {
 						newChatButton?.click();

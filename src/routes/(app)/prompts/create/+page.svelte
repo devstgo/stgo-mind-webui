@@ -35,7 +35,7 @@
 
 			if (prompt) {
 				await prompts.set(await getPrompts(localStorage.token));
-				await goto('/prompts');
+				await goto(base + '/prompts');
 			}
 		} else {
 			toast.error(
