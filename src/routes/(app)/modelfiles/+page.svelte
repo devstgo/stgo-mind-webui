@@ -13,6 +13,7 @@
 		getModelfiles
 	} from '$lib/apis/modelfiles';
 	import { goto } from '$app/navigation';
+	import { base } from "$app/paths";
 
 	const i18n = getContext('i18n');
 
@@ -167,7 +168,7 @@
 								on:click={() => {
 									// console.log(modelfile);
 									sessionStorage.modelfile = JSON.stringify(modelfile);
-									goto('/modelfiles/create');
+									goto(base + '/modelfiles/create');
 								}}
 							>
 								<svg

@@ -5,6 +5,7 @@
 	const { saveAs } = fileSaver;
 
 	import { goto, invalidateAll } from '$app/navigation';
+	import { base } from "$app/paths";
 	import { page } from '$app/stores';
 	import { user, chats, settings, showSettings, chatId, tags } from '$lib/stores';
 	import { onMount, getContext } from 'svelte';
@@ -662,7 +663,7 @@
 									<button
 										class="flex rounded-md py-2.5 px-3.5 w-full hover:bg-gray-100 dark:hover:bg-gray-800 transition"
 										on:click={() => {
-											goto('/admin');
+											goto(base + '/admin');
 											showDropdown = false;
 										}}
 									>
@@ -688,7 +689,7 @@
 									<button
 										class="flex rounded-md py-2.5 px-3.5 w-full hover:bg-gray-100 dark:hover:bg-gray-800 transition"
 										on:click={() => {
-											goto('/playground');
+											goto(base + '/playground');
 											showDropdown = false;
 										}}
 									>

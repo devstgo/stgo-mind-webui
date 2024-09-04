@@ -6,6 +6,7 @@
 	const { saveAs } = fileSaver;
 
 	import { goto } from '$app/navigation';
+	import { base } from "$app/paths";
 
 	import { getModels as _getModels } from '$lib/utils';
 	import { getOllamaVersion } from '$lib/apis/ollama';
@@ -67,7 +68,7 @@
 
 	onMount(async () => {
 		if ($user === undefined) {
-			await goto('/auth');
+			await goto(base + '/auth');
 		} else if (['user', 'admin'].includes($user.role)) {
 			try {
 				// Check if IndexedDB exists

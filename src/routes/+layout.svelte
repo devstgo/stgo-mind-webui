@@ -2,6 +2,7 @@
 	import { onMount, tick, setContext } from 'svelte';
 	import { config, user, theme, WEBUI_NAME } from '$lib/stores';
 	import { goto } from '$app/navigation';
+	import { base } from "$app/paths";
 	import { Toaster, toast } from 'svelte-sonner';
 
 	import { getBackendConfig } from '$lib/apis';
@@ -51,15 +52,15 @@
 					} else {
 						// Redirect Invalid Session User to /auth Page
 						localStorage.removeItem('token');
-						await goto('/auth');
+						await goto(base + '/auth');
 					}
 				} else {
-					await goto('/auth');
+					await goto(base + '/auth');
 				}
 			}
 		} else {
 			// Redirect to /error when Backend Not Detected
-			await goto(`/error`);
+			await goto(base + `/error`);
 		}
 
 		await tick();

@@ -4,6 +4,7 @@
 
 	import { onMount, tick, getContext } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { base } from "$app/paths";
 	import { page } from '$app/stores';
 
 	import {
@@ -113,7 +114,7 @@
 				const chatInput = document.getElementById('chat-textarea');
 				chatInput?.focus();
 			} else {
-				await goto('/');
+				await goto(base + '/');
 			}
 		})();
 	}
@@ -125,7 +126,7 @@
 	const loadChat = async () => {
 		await chatId.set($page.params.id);
 		chat = await getChatById(localStorage.token, $chatId).catch(async (error) => {
-			await goto('/');
+			await goto(base + '/');
 			return null;
 		});
 
@@ -849,7 +850,7 @@
 
 	onMount(async () => {
 		if (!($settings.saveChatHistory ?? true)) {
-			await goto('/');
+			await goto(base + '/');
 		}
 	});
 </script>
@@ -876,7 +877,7 @@
 					currentRequestId = null;
 				}
 
-				goto('/');
+				goto(base + '/');
 			}}
 		/>
 		<div class="flex flex-col flex-auto">
