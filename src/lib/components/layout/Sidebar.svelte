@@ -182,7 +182,7 @@
 			<a
 				id="sidebar-new-chat-button"
 				class="flex-grow flex justify-between rounded-xl px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-				href="/"
+				href="{base}/"
 				on:click={async () => {
 					selectedChatId = null;
 
@@ -227,7 +227,7 @@
 			<div class="px-2 flex justify-center mt-0.5">
 				<a
 					class="flex-grow flex space-x-3 rounded-xl px-3.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-					href="/modelfiles"
+					href="{base}/modelfiles"
 					on:click={() => {
 						selectedChatId = null;
 						chatId.set('');
@@ -259,7 +259,7 @@
 			<div class="px-2 flex justify-center">
 				<a
 					class="flex-grow flex space-x-3 rounded-xl px-3.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-					href="/prompts"
+					href="{base}/prompts"
 					on:click={() => {
 						selectedChatId = null;
 						chatId.set('');
@@ -291,7 +291,7 @@
 			<div class="px-2 flex justify-center mb-1">
 				<a
 					class="flex-grow flex space-x-3 rounded-xl px-3.5 py-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition"
-					href="/documents"
+					href="{base}/documents"
 					on:click={() => {
 						selectedChatId = null;
 						chatId.set('');
@@ -463,7 +463,7 @@
 									: chat.id === selectedChatId
 									? 'bg-gray-100 dark:bg-gray-950'
 									: ' group-hover:bg-gray-100 dark:group-hover:bg-gray-950'}  whitespace-nowrap text-ellipsis"
-								href="/c/{chat.id}"
+								href="{base}/c/{chat.id}"
 								on:click={() => {
 									selectedChatId = chat.id;
 									if (window.innerWidth < 1024) {
