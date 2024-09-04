@@ -112,7 +112,7 @@
 	};
 
 	const loadChat = async (id) => {
-		goto(`/c/${id}`);
+		goto(base + `/c/${id}`);
 	};
 
 	const editChatTitle = async (id, _title) => {
@@ -148,7 +148,7 @@
 	const saveSettings = async (updated) => {
 		await settings.set({ ...$settings, ...updated });
 		localStorage.setItem('settings', JSON.stringify($settings));
-		location.href = '/';
+		location.href = base + '/';
 	};
 
 	const archiveChatHandler = async (id) => {
