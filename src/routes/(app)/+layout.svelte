@@ -300,7 +300,7 @@
 		<div class="absolute -z-10 inset-0 max-h-screen overflow-hidden">
 		<video
 			class="w-auto min-w-full min-h-full max-w-none xl:max-w-full"
-			src="https://demos.stgo.dev/gateway/repository-dev-portal/background-ai.mp4"
+			src="https://cdn.stgo.dev/perte/background-ai.mp4"
 			autoPlay
 			loop
 			controls={false}
