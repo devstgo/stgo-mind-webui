@@ -5,6 +5,7 @@
 	import { onMount, tick, getContext } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { base } from "$app/paths";
 
 	import {
 		models,
@@ -109,7 +110,7 @@
 			await cancelOllamaRequest(localStorage.token, currentRequestId);
 			currentRequestId = null;
 		}
-		window.history.replaceState(history.state, '', `/`);
+		window.history.replaceState(history.state, '', `${base}/`);
 		await chatId.set('');
 
 		autoScroll = true;

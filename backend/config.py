@@ -356,8 +356,8 @@ DEFAULT_PROMPT_SUGGESTIONS = (
             "content": "What are 5 creative things I could do with my kids' art? I don't want to throw them away, but it's also so much clutter.",
         },
         {
-            "title": ["Tell me a fun fact", "about the Roman Empire"],
-            "content": "Tell me a random fun fact about the Roman Empire",
+            "title": ["Háblame sobre un API", "de monitorización de obra"],
+            "content": "Dame detalles sobre el API de streamlapse",
         },
         {
             "title": ["Show me a code snippet", "of a website's sticky header"],
