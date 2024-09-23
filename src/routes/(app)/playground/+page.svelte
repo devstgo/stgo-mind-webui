@@ -119,7 +119,7 @@
 								if ('request_id' in data) {
 									currentRequestId = data.request_id;
 								} else {
-									text += data.choices[0].delta.content ?? '';
+									text += data.result?.output?.content ?? '';
 								}
 							}
 						}
@@ -206,12 +206,12 @@
 								if ('request_id' in data) {
 									currentRequestId = data.request_id;
 								} else {
-									if (responseMessage.content == '' && data.choices[0].delta.content == '\n') {
+									if (responseMessage.content == '' && data.result?.output?.content == '\n') {
 										continue;
 									} else {
 										textareaElement.style.height = textareaElement.scrollHeight + 'px';
 
-										responseMessage.content += data.choices[0].delta.content ?? '';
+										responseMessage.content += data.result?.output?.content ?? '';
 										messages = messages;
 
 										textareaElement.style.height = textareaElement.scrollHeight + 'px';

@@ -73,6 +73,9 @@
 	renderer.codespan = (code) => {
 		return `<code>${code.replaceAll('&amp;', '&')}</code>`;
 	};
+	renderer.link = (href: string, title: string | null | undefined, text: string) => {
+		return `<a href="${href}" target="_blank">${text}</a>`;
+	}
 
 	const { extensions, ...defaults } = marked.getDefaults() as marked.MarkedOptions & {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
