@@ -348,21 +348,21 @@ DEFAULT_PROMPT_SUGGESTIONS = (
     and type(CONFIG_DATA["ui"]["prompt_suggestions"]) is list
     else [
         {
-            "title": ["Help me study", "vocabulary for a college entrance exam"],
-            "content": "Help me study vocabulary: write a sentence for me to fill in the blank, and I'll try to pick the correct option.",
+            "title": ["Dime cuantos APIs y categorías", "hay en el Gateway DevPortal"],
+            "content": "Dime cuantos APIs, categorías y endpoints publicados ",
         },
-        {
-            "title": ["Give me ideas", "for what to do with my kids' art"],
-            "content": "What are 5 creative things I could do with my kids' art? I don't want to throw them away, but it's also so much clutter.",
-        },
+        # {
+        #     "title": ["Give me ideas", "for what to do with my kids' art"],
+        #     "content": "What are 5 creative things I could do with my kids' art? I don't want to throw them away, but it's also so much clutter.",
+        # },
         {
             "title": ["Háblame sobre un API", "de monitorización de obra"],
             "content": "Dame detalles sobre el API de streamlapse",
         },
-        {
-            "title": ["Show me a code snippet", "of a website's sticky header"],
-            "content": "Show me a code snippet of a website's sticky header in CSS and JavaScript.",
-        },
+        # {
+        #     "title": ["Show me a code snippet", "of a website's sticky header"],
+        #     "content": "Show me a code snippet of a website's sticky header in CSS and JavaScript.",
+        # },
     ]
 )
 
