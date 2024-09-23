@@ -82,7 +82,7 @@
 		</div>
 	</div>
 
-	<div class=" bg-white dark:bg-gray-900 min-h-screen w-full flex justify-center font-mona">
+	<div class=" bg-[#0d152a] min-h-screen w-full flex justify-center font-mona">
 		<!-- <div class="hidden lg:flex lg:flex-1 px-10 md:px-16 w-full bg-yellow-50 justify-center">
 			<div class=" my-auto pb-16 text-left">
 				<div>
@@ -181,7 +181,7 @@
 
 						<div class="mt-5">
 							<button
-								class=" bg-gray-900 hover:bg-gray-800 w-full rounded-full text-white font-semibold text-sm py-3 transition"
+								class=" bg-[#0d152a] hover:bg-gray-800 w-full rounded-full text-white font-semibold text-sm py-3 transition"
 								type="submit"
 							>
 								{mode === 'signin' ? $i18n.t('Sign in') : $i18n.t('Create Account')}
